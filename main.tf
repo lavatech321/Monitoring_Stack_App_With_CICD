@@ -159,6 +159,7 @@ resource "aws_instance" "servers" {
     #"sudo systemctl enable jenkins",
 
     # Configure jenkins
+	"sed -i 's/\\r$//' /home/ec2-user/code.sh",
     "sudo chmod +x /home/ec2-user/code.sh",
     "bash /home/ec2-user/code.sh",
     "bash /home/ec2-user/code.sh",
