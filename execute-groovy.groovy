@@ -18,8 +18,13 @@ pipeline {
 
     stages {
         stage('Clone Repo') {
-            steps {
+	    steps {
                 git branch: 'main', url: 'https://github.com/lavatech321/Monitoring_Stack_App.git'
+
+                // Replace IP after clone
+                sh '''
+               sed -i "s/REPLACE-IP/PUBLIC-IP/g" app/react-app/weather_app_frontend/src/service/WeatherService.js
+                '''
             }
         }
 
@@ -42,3 +47,4 @@ instance.save()
 
 // 🔥 TRIGGER BUILD AUTOMATICALLY
 job.scheduleBuild2(0)
+

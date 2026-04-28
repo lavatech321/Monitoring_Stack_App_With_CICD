@@ -1,6 +1,6 @@
 
 resource "aws_key_pair" "mykey" {
-    key_name = "terraform-ansible-key1"
+    key_name = "terraform-ansible-key-2"
     #public_key = file("C:/Users/username/.ssh/id_rsa.pub")
     public_key = file("~/.ssh/id_rsa.pub")
 }
@@ -23,7 +23,7 @@ resource "aws_security_group" "jenkins-allow" {
 }
 
 resource "aws_security_group" "ssh-allow" {
-    name = "allow-ssh-ansible"
+    name = "allow-ssh-ansible-2"
     description = "Allow only ssh port"
     ingress {
         from_port = 22
@@ -103,18 +103,23 @@ resource "aws_security_group" "monitoring-allow" {
   }
 }
 
-
-data "aws_ami" "amazon_linux" {
+data "aws_ami" "ubuntu_22" {
   most_recent = true
-  owners      = ["amazon"]
+  owners      = ["099720109477"] # Canonical (Ubuntu)
+
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
   }
 }
 
 resource "aws_instance" "servers" {
-    ami = data.aws_ami.amazon_linux.id
+    ami = data.aws_ami.ubuntu_22.id
     instance_type = "m7i-flex.large"
     key_name = aws_key_pair.mykey.key_name
     root_block_device {
@@ -124,66 +129,79 @@ resource "aws_instance" "servers" {
 	  encrypted             = true
     }
     vpc_security_group_ids = [
-  aws_security_group.ssh-allow.id,
-  aws_security_group.reactjs-allow.id,
-  aws_security_group.spring-allow.id,
-  aws_security_group.monitoring-allow.id,
-  aws_security_group.jenkins-allow.id
+    aws_security_group.ssh-allow.id,
+    aws_security_group.reactjs-allow.id,
+    aws_security_group.spring-allow.id,
+    aws_security_group.monitoring-allow.id,
+    aws_security_group.jenkins-allow.id
 ]
-
 
     connection {
                 type     = "ssh"
-                user     = "ec2-user"
+                user     = "ubuntu"
                 private_key = file("~/.ssh/id_rsa")
                 host = aws_instance.servers.public_ip
         }
 	provisioner "file" {
     		source      = "configure-jenkins.sh"
-		destination = "/home/ec2-user/code.sh"
+		destination = "/home/ubuntu/code.sh"
   	}
 	provisioner "file" {
     		source      = "execute-groovy.groovy"
-		destination = "/home/ec2-user/pipeline.groovy"
+		destination = "/home/ubuntu/pipeline.groovy"
   	}
+
 	provisioner "remote-exec" {
   inline = [
-	"sudo yum update -y",
-	"sudo yum install git -y",
-	"sudo yum install java-17-amazon-corretto -y",
+    "sudo apt update -y",
+    "sudo apt install -y ca-certificates curl gnupg git openjdk-21-jdk wget",
 
-    # Install Jenkins
-    "sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo",
-    "sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key",
-    "sudo yum install jenkins -y",
-    #"sudo systemctl enable jenkins",
+    # Jenkins install
+    "wget https://pkg.jenkins.io/debian-stable/binary/jenkins_2.555.1_all.deb -O /tmp/jenkins.deb",
+    "sudo apt install -y /tmp/jenkins.deb",
+    "sudo systemctl enable jenkins",
+    "sudo systemctl start jenkins",
 
-    # Configure jenkins
-	"sed -i 's/\\r$//' /home/ec2-user/code.sh",
-    "sudo chmod +x /home/ec2-user/code.sh",
-    "bash /home/ec2-user/code.sh",
-    "bash /home/ec2-user/code.sh",
+    "chmod +x /home/ubuntu/code.sh",
+    "sudo bash /home/ubuntu/code.sh",
 
-    # docker install
-			"sudo yum install docker-io -y",
-  			"sudo hostnamectl set-hostname demo.example.com",
-			"sudo systemctl start docker",
-			"sudo systemctl enable docker",
-			"sudo usermod -aG docker $USER",
-			"sudo usermod -aG docker jenkins",
-			"sudo mkdir -p /usr/local/lib/docker/cli-plugins",
-			"sudo curl -SL https://github.com/docker/compose/releases/download/v2.25.0/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose",
-			"sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose",
-			"sudo cp /home/ec2-user/pipeline.groovy /var/lib/jenkins/init.groovy.d/pipeline.groovy",
-			"sudo chown jenkins:jenkins  /var/lib/jenkins/init.groovy.d/pipeline.groovy",
-			"sudo systemctl restart docker",
-			"sudo systemctl restart jenkins",
+    # Docker install
+    "sudo apt-get update",
+    "sudo apt-get install -y ca-certificates curl gnupg lsb-release",
+    "sudo mkdir -p /etc/apt/keyrings",
+
+    "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg",
+    "sudo chmod a+r /etc/apt/keyrings/docker.gpg",
+
+    "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null",
+
+    "sudo apt-get update",
+    "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
+
+    "sudo systemctl enable docker",
+    "sudo systemctl start docker",
+
+    # Add users safely
+    "sudo usermod -aG docker ubuntu || true",
+    "sudo usermod -aG docker jenkins || true",
+
+    # Jenkins pipeline setup
+    "sudo mkdir -p /var/lib/jenkins/init.groovy.d",
+    "sudo cp /home/ubuntu/pipeline.groovy /var/lib/jenkins/init.groovy.d/pipeline.groovy",
+    "sudo chown jenkins:jenkins /var/lib/jenkins/init.groovy.d/pipeline.groovy",
+
+    # set ec2-instance ip in jenkins job
+    "sudo sed -i 's/PUBLIC-IP/${self.public_ip}/g' /var/lib/jenkins/init.groovy.d/pipeline.groovy",
+
+    "sudo systemctl restart docker",
+    "sudo systemctl restart jenkins"
   ]
-}
+}	
+
 }
 
 output "EC2-Instance-access-details" {
-	value = "ssh -i ~/.ssh/id_rsa ec2-user@${aws_instance.servers.public_ip} \n"
+	value = "ssh -i ~/.ssh/id_rsa ubuntu@${aws_instance.servers.public_ip} \n"
 }
 
 output "Jenkins-UI" {
